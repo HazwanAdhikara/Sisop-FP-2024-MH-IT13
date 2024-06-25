@@ -10,6 +10,8 @@
 
 void registerUser(int server_socket, char *username, char *password);
 void loginUser(int server_socket, char *username, char *password);
+void joinChannel(int server_socket, char *username, char *channel);
+void handleCommand(int server_socket, char *command);
 int sendCommand(int server_socket, char *command);
 int receiveResponse(int server_socket, char *buffer, size_t buffer_size);
 
@@ -42,11 +44,26 @@ void loginUser(int server_socket, char *username, char *password)
                 if (fgets(buffer, sizeof(buffer), stdin) != NULL)
                 {
                     buffer[strcspn(buffer, "\n")] = 0;
-                    if (strcmp(buffer, "exit") == 0)
+                    if (strncmp(buffer, "JOIN ", 5) == 0)
+                    {
+                        char channel[BUFFER_SIZE];
+                        sscanf(buffer + 5, "%s", channel);
+                        joinChannel(server_socket, username, channel);
+                    }
+                    else if (strcmp(buffer, "exit") == 0)
                     {
                         break;
                     }
+                    else if (strcmp(buffer, "LIST CHANNEL") == 0)
+                    {
+                        handleCommand(server_socket, buffer);
+                    }
+                    else
+                    {
+                        printf("Unknown command\n");
+                    }
                 }
+                printf("[%s] ", username); // Prompt again after command
             }
         }
         else
@@ -54,6 +71,32 @@ void loginUser(int server_socket, char *username, char *password)
             printf("%s\n", buffer); // Print server response
             exit(EXIT_FAILURE);
         }
+    }
+}
+
+void joinChannel(int server_socket, char *username, char *channel)
+{
+    char buffer[BUFFER_SIZE];
+    snprintf(buffer, sizeof(buffer), "JOIN %s %s", username, channel);
+    sendCommand(server_socket, buffer);
+
+    if (receiveResponse(server_socket, buffer, sizeof(buffer)))
+    {
+        printf("%s\n", buffer);
+    }
+}
+
+void handleCommand(int server_socket, char *command)
+{
+    char buffer[BUFFER_SIZE];
+
+    write(server_socket, command, strlen(command));
+
+    int bytes_read = read(server_socket, buffer, sizeof(buffer));
+    if (bytes_read > 0)
+    {
+        buffer[bytes_read] = '\0';
+        printf("%s\n", buffer);
     }
 }
 

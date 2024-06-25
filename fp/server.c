@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <dirent.h>
 
+#define SERVER_IP "127.0.0.1"
 #define PORT 8082
 #define BUFFER_SIZE 1024
 
@@ -28,11 +29,13 @@ typedef struct
 
 void handleClient(client_t *client);
 void *clientHandler(void *arg);
+int user_exists(const char *username);
+char *get_user_role(const char *username);
 void registerUser(char *username, char *password, int client_socket);
 void hashPassword(const char *password, char *hashed_password);
 void loginUser(char *username, char *password, int client_socket);
 void listChannels(int client_socket);
-void joinChannel(char *username, char *channel, char *key, int client_socket);
+void joinChannel(char *username, char *channel, int client_socket);
 void joinRoom(char *username, char *channel, char *room, int client_socket);
 void chatMessages(char *username, char *channel, char *room, char *message, int client_socket);
 void seeChat(char *username, char *channel, char *room, int client_socket);
@@ -137,6 +140,21 @@ void *clientHandler(void *arg)
             char *password = strtok(NULL, " ");
             loginUser(username, password, client->socket);
         }
+        else if (strcmp(command, "JOIN") == 0)
+        {
+            char *username = strtok(NULL, " ");
+            char *channel = strtok(NULL, " ");
+            if (username == NULL || channel == NULL)
+            {
+                errorResponse("Invalid JOIN command format", client->socket);
+            }
+            else
+            {
+                printf("Handling JOIN for user: %s to channel: %s\n", username, channel); // Log
+                joinChannel(username, channel, client->socket);
+            }
+        }
+
         else if (strcmp(command, "LIST") == 0)
         {
             char *entity = strtok(NULL, " ");
@@ -208,6 +226,33 @@ int user_exists(const char *username)
 
     fclose(fp);
     return 0;
+}
+
+char *get_user_role(const char *username)
+{
+    static char role[10];
+    FILE *fp = fopen("DiscorIT/users.csv", "r");
+    if (fp == NULL)
+    {
+        perror("Failed to open users.csv");
+        return NULL;
+    }
+
+    char line[BUFFER_SIZE];
+    while (fgets(line, sizeof(line), fp))
+    {
+        char *file_username = strtok(line, ",");
+        char *file_role = strtok(NULL, "\n");
+
+        if (strcmp(file_username, username) == 0)
+        {
+            strcpy(role, file_role);
+            fclose(fp);
+            return role;
+        }
+    }
+    fclose(fp);
+    return NULL;
 }
 
 void registerUser(char *username, char *password, int client_socket)
@@ -282,15 +327,89 @@ void loginUser(char *username, char *password, int client_socket)
 
 void listChannels(int client_socket)
 {
-    char response[BUFFER_SIZE] = "CHANNEL1,CHANNEL2";
-    write(client_socket, response, strlen(response));
+    DIR *d;
+    struct dirent *dir;
+    char channels[BUFFER_SIZE][256];
+    int count = 0;
+
+    d = opendir("DiscorIT");
+    if (d)
+    {
+        while ((dir = readdir(d)) != NULL)
+        {
+            if (dir->d_type == DT_DIR && strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
+            {
+                snprintf(channels[count], sizeof(channels[count]), "%s", dir->d_name);
+                count++;
+            }
+        }
+        closedir(d);
+    }
+
+    for (int i = 0; i < count - 1; i++)
+    {
+        for (int j = i + 1; j < count; j++)
+        {
+            if (strcmp(channels[i], channels[j]) > 0)
+            {
+                char temp[256];
+                strcpy(temp, channels[i]);
+                strcpy(channels[i], channels[j]);
+                strcpy(channels[j], temp);
+            }
+        }
+    }
+
+    char response[BUFFER_SIZE] = "";
+    for (int i = 0; i < count; i++)
+    {
+        strcat(response, channels[i]);
+        if (i < count - 1)
+        {
+            strcat(response, " ");
+        }
+    }
+
+    send(client_socket, response, strlen(response), 0);
 }
 
-void joinChannel(char *username, char *channel, char *key, int client_socket)
+void joinChannel(char *username, char *channel, int client_socket)
 {
     char response[BUFFER_SIZE];
-    snprintf(response, sizeof(response), "%s joined %s", username, channel);
-    write(client_socket, response, strlen(response));
+    char *role = get_user_role(username);
+
+    if (role == NULL)
+    {
+        snprintf(response, sizeof(response), "Gagal mendapatkan role user");
+        send(client_socket, response, strlen(response), 0);
+        return;
+    }
+
+    if (strcmp(role, "USER") == 0)
+    {
+        // Request key for USER role
+        snprintf(response, sizeof(response), "Key: ");
+        send(client_socket, response, strlen(response), 0);
+
+        char key[BUFFER_SIZE];
+        int bytes_received = recv(client_socket, key, sizeof(key) - 1, 0);
+        if (bytes_received > 0)
+        {
+            key[bytes_received] = '\0';
+            snprintf(response, sizeof(response), "[%s/%s]", username, channel);
+            send(client_socket, response, strlen(response), 0);
+        }
+        else
+        {
+            snprintf(response, sizeof(response), "Key tidak valid");
+            send(client_socket, response, strlen(response), 0);
+        }
+    }
+    else
+    {
+        snprintf(response, sizeof(response), "[%s/%s]", username, channel);
+        send(client_socket, response, strlen(response), 0);
+    }
 }
 
 void joinRoom(char *username, char *channel, char *room, int client_socket)
