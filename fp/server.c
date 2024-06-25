@@ -19,6 +19,9 @@
 #define MAX_FILENAME_LEN 100
 #define MAX_USERNAME_LEN 50
 #define MAX_PASSWORD_LEN 50
+#define MAX_CHANNELS 10
+#define MAX_ROOMS 10
+#define MAX_USERS 100
 #define SALT_LEN 16
 
 typedef struct
@@ -35,6 +38,8 @@ void registerUser(char *username, char *password, int client_socket);
 void hashPassword(const char *password, char *hashed_password);
 void loginUser(char *username, char *password, int client_socket);
 void listChannels(int client_socket);
+void listRooms(int client_socket);
+void listUser(int client_socket);
 void joinChannel(char *username, char *channel, int client_socket);
 void joinRoom(char *username, char *channel, char *room, int client_socket);
 void chatMessages(char *username, char *channel, char *room, char *message, int client_socket);
@@ -127,6 +132,7 @@ void *clientHandler(void *arg)
     {
         buffer[bytes_read] = '\0';
 
+        char *entity = strtok(NULL, " ");
         char *command = strtok(buffer, " ");
         if (strcmp(command, "REGISTER") == 0)
         {
@@ -144,14 +150,18 @@ void *clientHandler(void *arg)
         {
             char *username = strtok(NULL, " ");
             char *channel = strtok(NULL, " ");
-            if (username == NULL || channel == NULL)
+
+            if (strcmp(entity, "CHANNEL") == 0)
+            {
+                joinChannel(username, channel, client->socket);
+            }
+            else if (username == NULL || channel == NULL)
             {
                 errorResponse("Invalid JOIN command format", client->socket);
             }
             else
             {
                 printf("Handling JOIN for user: %s to channel: %s\n", username, channel); // Log
-                joinChannel(username, channel, client->socket);
             }
         }
 
@@ -161,6 +171,14 @@ void *clientHandler(void *arg)
             if (strcmp(entity, "CHANNEL") == 0)
             {
                 listChannels(client->socket);
+            }
+            else if (strcmp(entity, "ROOM") == 0)
+            {
+                listRooms(client->socket);
+            }
+            else if (strcmp(entity, "USER") == 0)
+            {
+                listUser(client->socket);
             }
         }
         else if (strcmp(command, "CREATE") == 0)
@@ -373,6 +391,176 @@ void listChannels(int client_socket)
     send(client_socket, response, strlen(response), 0);
 }
 
+void listRooms(int client_socket)
+{
+    DIR *d, *sub_dir;
+    struct dirent *dir, *sub_dirent;
+    char path[BUFFER_SIZE];
+    char *channels[MAX_CHANNELS];
+    char *rooms[MAX_CHANNELS][MAX_ROOMS];
+    int channel_count = 0;
+    int room_counts[MAX_CHANNELS] = {0};
+
+    d = opendir("DiscorIT");
+    if (d)
+    {
+        while ((dir = readdir(d)) != NULL)
+        {
+            if (dir->d_type == DT_DIR && strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
+            {
+                channels[channel_count] = strdup(dir->d_name);
+                snprintf(path, sizeof(path), "DiscorIT/%s", dir->d_name);
+
+                sub_dir = opendir(path);
+                if (sub_dir)
+                {
+                    while ((sub_dirent = readdir(sub_dir)) != NULL)
+                    {
+                        if (sub_dirent->d_type == DT_DIR && strcmp(sub_dirent->d_name, ".") != 0 && strcmp(sub_dirent->d_name, "..") != 0)
+                        {
+                            rooms[channel_count][room_counts[channel_count]] = strdup(sub_dirent->d_name);
+                            room_counts[channel_count]++;
+                        }
+                    }
+                    closedir(sub_dir);
+                }
+                channel_count++;
+            }
+        }
+        closedir(d);
+    }
+
+    for (int i = 0; i < channel_count - 1; i++)
+    {
+        for (int j = i + 1; j < channel_count; j++)
+        {
+            if (strcmp(channels[i], channels[j]) > 0)
+            {
+                char *temp = channels[i];
+                channels[i] = channels[j];
+                channels[j] = temp;
+
+                int temp_count = room_counts[i];
+                room_counts[i] = room_counts[j];
+                room_counts[j] = temp_count;
+
+                char *temp_rooms[MAX_ROOMS];
+                memcpy(temp_rooms, rooms[i], sizeof(temp_rooms));
+                memcpy(rooms[i], rooms[j], sizeof(temp_rooms));
+                memcpy(rooms[j], temp_rooms, sizeof(temp_rooms));
+            }
+        }
+    }
+
+    for (int i = 0; i < channel_count; i++)
+    {
+        for (int j = 0; j < room_counts[i] - 1; j++)
+        {
+            for (int k = j + 1; k < room_counts[i]; k++)
+            {
+                if (strcmp(rooms[i][j], rooms[i][k]) > 0)
+                {
+                    char *temp = rooms[i][j];
+                    rooms[i][j] = rooms[i][k];
+                    rooms[i][k] = temp;
+                }
+            }
+        }
+    }
+
+    char response[BUFFER_SIZE] = "";
+    for (int i = 0; i < channel_count; i++)
+    {
+        strcat(response, channels[i]);
+        strcat(response, " : ");
+        for (int j = 0; j < room_counts[i]; j++)
+        {
+            strcat(response, rooms[i][j]);
+            if (j < room_counts[i] - 1)
+            {
+                strcat(response, " ");
+            }
+        }
+        strcat(response, "\n");
+    }
+
+    if (response[strlen(response) - 1] == '\n')
+    {
+        response[strlen(response) - 1] = '\0';
+    }
+
+    send(client_socket, response, strlen(response), 0);
+
+    for (int i = 0; i < channel_count; i++)
+    {
+        free(channels[i]);
+        for (int j = 0; j < room_counts[i]; j++)
+        {
+            free(rooms[i][j]);
+        }
+    }
+}
+
+void listUser(int client_socket)
+{
+    FILE *file;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char *usernames[MAX_USERS];
+    int user_count = 0;
+
+    file = fopen("DiscorIT/users.csv", "r");
+    if (file == NULL)
+    {
+        perror("Could not open users.csv");
+        return;
+    }
+
+    while ((read = getline(&line, &len, file)) != -1)
+    {
+        // Extract the username from the line
+        char *token = strtok(line, ",");
+        if (token != NULL)
+        {
+            usernames[user_count] = strdup(token);
+            user_count++;
+        }
+    }
+    fclose(file);
+    if (line)
+        free(line);
+
+    // Sort usernames alphabetically
+    for (int i = 0; i < user_count - 1; i++)
+    {
+        for (int j = i + 1; j < user_count; j++)
+        {
+            if (strcmp(usernames[i], usernames[j]) > 0)
+            {
+                char *temp = usernames[i];
+                usernames[i] = usernames[j];
+                usernames[j] = temp;
+            }
+        }
+    }
+
+    // Build the response string
+    char response[BUFFER_SIZE] = "";
+    for (int i = 0; i < user_count; i++)
+    {
+        strcat(response, usernames[i]);
+        if (i < user_count - 1)
+        {
+            strcat(response, " ");
+        }
+        free(usernames[i]);
+    }
+
+    // Send the response to the client
+    send(client_socket, response, strlen(response), 0);
+}
+
 void joinChannel(char *username, char *channel, int client_socket)
 {
     char response[BUFFER_SIZE];
@@ -410,6 +598,7 @@ void joinChannel(char *username, char *channel, int client_socket)
         snprintf(response, sizeof(response), "[%s/%s]", username, channel);
         send(client_socket, response, strlen(response), 0);
     }
+    send(client_socket, response, strlen(response), 0);
 }
 
 void joinRoom(char *username, char *channel, char *room, int client_socket)

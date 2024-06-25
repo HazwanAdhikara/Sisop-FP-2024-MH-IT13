@@ -50,11 +50,24 @@ void loginUser(int server_socket, char *username, char *password)
                         sscanf(buffer + 5, "%s", channel);
                         joinChannel(server_socket, username, channel);
                     }
-                    else if (strcmp(buffer, "exit") == 0)
+                    else if (strcmp(buffer, "EXIT") == 0)
                     {
                         break;
                     }
+                    else if (strcmp(buffer, "JOIN CHANNEL") == 0)
+                    {
+                        handleCommand(server_socket, buffer);
+                        sendCommand(server_socket, buffer);
+                    }
                     else if (strcmp(buffer, "LIST CHANNEL") == 0)
+                    {
+                        handleCommand(server_socket, buffer);
+                    }
+                    else if (strcmp(buffer, "LIST ROOM") == 0)
+                    {
+                        handleCommand(server_socket, buffer);
+                    }
+                    else if (strcmp(buffer, "LIST USER") == 0)
                     {
                         handleCommand(server_socket, buffer);
                     }
